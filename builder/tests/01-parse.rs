@@ -31,8 +31,8 @@ pub struct Command {
     current_dir: String,
 }
 
-#[derive(Builder)]
-pub struct CommandGeneric<T> where T: Into<String> {
+//#[derive(Builder)]
+pub struct CommandGeneric<T> {
     executable: T,
     args: Vec<T>,
     env: Vec<T>,
