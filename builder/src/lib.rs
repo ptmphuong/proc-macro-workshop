@@ -10,14 +10,56 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let struct_name = &ast.ident;
     let builder_name = format!("{}Builder", struct_name);
     let builder_ident = syn::Ident::new(&builder_name, struct_name.span());
+    //let fields = match ast.data {
+        //syn::Data::Struct(syn::DataStruct {
+            //fields: syn::Fields::Named(syn::FieldsNamed { ref named, .. }),
+            //..
+        //}) => named,
+        //_ => unimplemented!(),
+    //}
+    
+    let fields = if let syn::Data::Struct(syn::DataStruct {
+        fields: syn::Fields::Named(syn::FieldsNamed { ref named, .. }),
+        ..
+    }) = ast.data
+    { 
+        named 
+    } else {
+        unimplemented!();
+    };
+
+    let optionized = fields.iter().map(|f| {
+        let name = &f.ident;
+        let ty= &f.ty;
+        quote! { #name: std::option::Option<#ty> }
+    });
+
+    let methods = fields.iter().map(|f| {
+        let name = &f.ident;
+        let ty= &f.ty;
+        quote! { 
+            pub fn #name(&mut self, #name: #ty) -> &mut Self {
+                self.#name = Some(#name);
+                self
+            }
+        }
+    });
 
     let expanded = quote! {
-        struct #builder_ident {
-            executable: Option<String>,
-            args: Option<Vec<String>>,
-            env: Option<Vec<String>>,
-            current_dir: Option<String>,
+        pub struct #builder_ident {
+            #(#optionized,)*
         }
+
+        impl #builder_ident {
+            #(#methods)*
+
+            //pub fn build(&mut self) -> Result<#struct_name, Box<dyn std::error::Error>> {
+                //Ok(#name {
+
+                //})
+            //}
+        }
+
         impl #struct_name {
             fn builder() -> #builder_ident {
                 #builder_ident{
