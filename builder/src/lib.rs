@@ -1,10 +1,11 @@
 use proc_macro::TokenStream;
+use proc_macro2::TokenTree;
 use syn::{parse_macro_input, DeriveInput};
 use quote::quote;
 
-fn option_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+fn inner_type<'a>(wrapper_ty: &str, ty: &'a syn::Type) -> Option<&'a syn::Type> {
     if let syn::Type::Path(ref p) = ty {
-       if p.path.segments.len() != 1 || p.path.segments[0].ident != "Option" {
+       if p.path.segments.len() != 1 || p.path.segments[0].ident != wrapper_ty {
            return None;
        }
 
@@ -22,7 +23,7 @@ fn option_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
     None
 }
 
-#[proc_macro_derive(Builder)]
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     //eprintln!("{:#?}", ast);
@@ -44,11 +45,43 @@ pub fn derive(input: TokenStream) -> TokenStream {
         quote! { #name: std::option::Option<#ty>, }
     });
 
+    let get_each_arg = |f: &syn::Field| -> Option<syn::Ident> {
+        for attr in &f.attrs {
+            if let syn::Meta::List( ref metalist ) = attr.meta {
+                if metalist.path.segments.len() == 1 && metalist.path.segments[0].ident == "builder" {
+                    let tokenstream = & mut metalist.tokens.clone().into_iter();
+                    match tokenstream.next().unwrap() {
+                        TokenTree::Ident(ref i) => assert_eq!(i, "each"),
+                        unknown_token => panic!("expected 'each', found {}", unknown_token),
+                    }
+                    match tokenstream.next().unwrap() {
+                        TokenTree::Punct(ref p) => assert_eq!(p.as_char(), '='),
+                        unknown_token => panic!("expected '=', found {}", unknown_token),
+                    }
+
+                    let literal = match tokenstream.next().unwrap() {
+                        TokenTree::Literal(ref l) => l.clone(),
+                        unknown_token => panic!("expected '=', found {}", unknown_token),
+                    };
+
+                    match syn::Lit::new(literal) {
+                        syn::Lit::Str(s) => {
+                            let ident = syn::Ident::new(&s.value(), s.span());
+                            return Some(ident);
+                        },
+                        unknown_token => panic!("expected string literal, found {:?}", unknown_token),
+                    }
+                }
+            }
+        }
+        None
+    };
+
     let methods = fields.iter().map(|f| {
         let name = &f.ident;
-        let ty = &f.ty;
-        let inner_ty = option_inner_type(ty);
-        if option_inner_type(&ty).is_some() {
+        let original_ty = &f.ty;
+        let inner_ty = inner_type("Option", original_ty);
+        let set_method = if inner_ty.is_some() {
             quote! { 
                 pub fn #name(&mut self, #name: #inner_ty) -> &mut Self {
                     self.#name = Some(Some(#name));
@@ -57,18 +90,47 @@ pub fn derive(input: TokenStream) -> TokenStream {
             }
         } else {
             quote! { 
-                pub fn #name(&mut self, #name: #ty) -> &mut Self {
+                pub fn #name(&mut self, #name: #original_ty) -> &mut Self {
                     self.#name = Some(#name);
                     self
                 }
             }
+        };
+
+        if get_each_arg(f).is_none() {
+            return set_method;
         }
+
+        let vec_inner_type = inner_type("Vec", &f.ty).unwrap();
+        let each_arg = get_each_arg(f);
+        let set_each_method = quote! { 
+            pub fn #each_arg(&mut self, #each_arg: #vec_inner_type) -> &mut Self {
+                if let Some(ref mut values) = self.#name {
+                    values.push(#each_arg);
+                } else {
+                    self.#name = Some(vec![#each_arg]);
+                }
+                self
+            }
+        };
+
+        let conflict = &get_each_arg(f) == name;
+
+        if conflict {
+            return set_each_method;
+        } else {
+            return quote! {
+                #set_method
+                #set_each_method
+            };
+        }
+
     });
 
     let build_fields = fields.iter().map(|f| {
         let name = &f.ident;
         let ty = &f.ty;
-        if option_inner_type(&ty).is_some() {
+        if inner_type("Option", &ty).is_some() {
             quote! { 
                 #name: self.#name.clone().unwrap_or_else(|| None),
             }
@@ -81,8 +143,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let build_empty = fields.iter().map(|f| {
         let name = &f.ident;
-        quote! { 
-            #name: None,
+        if inner_type("Vec", &f.ty).is_some() {
+            quote! { 
+                #name: Some(Vec::new()),
+            }
+        } else {
+            quote! { 
+                #name: None,
+            }
         }
     });
 
