@@ -15,7 +15,7 @@ fn main() {
         .executable("cargo".to_owned())
         .arg("build".to_owned())
         .arg("--release".to_owned())
-        .env("unix".to_owned())
+        //.env("unix".to_owned())
         .build()
         .unwrap();
 

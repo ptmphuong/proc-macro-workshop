@@ -3,26 +3,6 @@ use proc_macro2::TokenTree;
 use syn::{parse_macro_input, DeriveInput};
 use quote::quote;
 
-fn inner_type<'a>(wrapper_ty: &str, ty: &'a syn::Type) -> Option<&'a syn::Type> {
-    if let syn::Type::Path(ref p) = ty {
-       if p.path.segments.len() != 1 || p.path.segments[0].ident != wrapper_ty {
-           return None;
-       }
-
-       if let syn::PathArguments::AngleBracketed(ref inner_ty_args) = p.path.segments[0].arguments {
-           if inner_ty_args.args.len() != 1 {
-               return None;
-           } 
-
-           let arg = inner_ty_args.args.first().unwrap();
-           if let syn::GenericArgument::Type(ref inner_ty) = arg {
-               return Some(inner_ty);
-           }
-       }
-    }
-    None
-}
-
 #[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
@@ -39,10 +19,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
         _ => unimplemented!(),
     };
 
-    let optionized = fields.iter().map(|f| {
+    let builder_field = fields.iter().map(|f| {
         let name = &f.ident;
         let ty = &f.ty;
-        quote! { #name: std::option::Option<#ty>, }
+        if inner_type("Option", ty).is_some() {
+            quote! { #name: #ty }
+        } else {
+            quote! { #name: std::option::Option<#ty>, }
+        }
     });
 
     let get_each_arg = |f: &syn::Field| -> Option<syn::Ident> {
@@ -84,7 +68,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         let set_method = if inner_ty.is_some() {
             quote! { 
                 pub fn #name(&mut self, #name: #inner_ty) -> &mut Self {
-                    self.#name = Some(Some(#name));
+                    self.#name = Some(#name);
                     self
                 }
             }
@@ -132,7 +116,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         let ty = &f.ty;
         if inner_type("Option", &ty).is_some() {
             quote! { 
-                #name: self.#name.clone().unwrap_or_else(|| None),
+                #name: self.#name.clone(),
             }
         } else {
             quote! { 
@@ -143,7 +127,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let build_empty = fields.iter().map(|f| {
         let name = &f.ident;
-        if inner_type("Vec", &f.ty).is_some() {
+        if get_each_arg(f).is_some() && inner_type("Vec", &f.ty).is_some() {
             quote! { 
                 #name: Some(Vec::new()),
             }
@@ -156,7 +140,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         pub struct #builder_ident {
-            #(#optionized)*
+            #(#builder_field)*
         }
 
         impl #builder_ident {
@@ -179,4 +163,24 @@ pub fn derive(input: TokenStream) -> TokenStream {
     };
 
     expanded.into()
+}
+
+fn inner_type<'a>(wrapper_ty: &str, ty: &'a syn::Type) -> Option<&'a syn::Type> {
+    if let syn::Type::Path(ref p) = ty {
+       if p.path.segments.len() != 1 || p.path.segments[0].ident != wrapper_ty {
+           return None;
+       }
+
+       if let syn::PathArguments::AngleBracketed(ref inner_ty_args) = p.path.segments[0].arguments {
+           if inner_ty_args.args.len() != 1 {
+               return None;
+           } 
+
+           let arg = inner_ty_args.args.first().unwrap();
+           if let syn::GenericArgument::Type(ref inner_ty) = arg {
+               return Some(inner_ty);
+           }
+       }
+    }
+    None
 }
