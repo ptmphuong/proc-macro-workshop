@@ -29,15 +29,23 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
-    let get_each_arg = |f: &syn::Field| -> Option<syn::Ident> {
+
+    let get_each_arg = |f: &syn::Field| -> (Option<syn::Ident>, Option<proc_macro2::TokenStream>) {
         for attr in &f.attrs {
             if let syn::Meta::List( ref metalist ) = attr.meta {
                 if metalist.path.segments.len() == 1 && metalist.path.segments[0].ident == "builder" {
                     let tokenstream = & mut metalist.tokens.clone().into_iter();
+
                     match tokenstream.next().unwrap() {
-                        TokenTree::Ident(ref i) => assert_eq!(i, "each"),
-                        unknown_token => panic!("expected 'each', found {}", unknown_token),
+                        TokenTree::Ident(ref i) => {
+                            if i != "each" {
+                                let err = syn::Error::new_spanned(metalist, r#"expected `builder(each = "...")`"#).to_compile_error();
+                                return (None, Some(err));
+                            }
+                        },
+                        unknown_token => panic!("expected each, found {}", unknown_token),
                     }
+
                     match tokenstream.next().unwrap() {
                         TokenTree::Punct(ref p) => assert_eq!(p.as_char(), '='),
                         unknown_token => panic!("expected '=', found {}", unknown_token),
@@ -50,15 +58,27 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
                     match syn::Lit::new(literal) {
                         syn::Lit::Str(s) => {
-                            let ident = syn::Ident::new(&s.value(), s.span());
-                            return Some(ident);
+                            let arg = &f.ident;
+                            let each_arg = syn::Ident::new(&s.value(), s.span());
+                            let vec_inner_type = inner_type("Vec", &f.ty).unwrap();
+                            let set_each_method = quote! { 
+                                pub fn #each_arg(&mut self, #each_arg: #vec_inner_type) -> &mut Self {
+                                    if let Some(ref mut values) = self.#arg {
+                                        values.push(#each_arg);
+                                    } else {
+                                        self.#arg = Some(vec![#each_arg]);
+                                    }
+                                    self
+                                }
+                            };
+                            return (Some(each_arg), Some(set_each_method));
                         },
                         unknown_token => panic!("expected string literal, found {:?}", unknown_token),
                     }
                 }
             }
         }
-        None
+        (None, None)
     };
 
     let methods = fields.iter().map(|f| {
@@ -81,34 +101,26 @@ pub fn derive(input: TokenStream) -> TokenStream {
             }
         };
 
-        if get_each_arg(f).is_none() {
+        let (each_arg, set_each_method) = get_each_arg(f);
+
+        if each_arg.is_none() && set_each_method.is_some() {
+            return set_each_method.unwrap();
+            //return set_method;
+        } else if each_arg.is_none() {
             return set_method;
-        }
-
-        let vec_inner_type = inner_type("Vec", &f.ty).unwrap();
-        let each_arg = get_each_arg(f);
-        let set_each_method = quote! { 
-            pub fn #each_arg(&mut self, #each_arg: #vec_inner_type) -> &mut Self {
-                if let Some(ref mut values) = self.#name {
-                    values.push(#each_arg);
-                } else {
-                    self.#name = Some(vec![#each_arg]);
-                }
-                self
-            }
-        };
-
-        let conflict = &get_each_arg(f) == name;
-
-        if conflict {
-            return set_each_method;
         } else {
-            return quote! {
-                #set_method
-                #set_each_method
-            };
+            let conflict = &each_arg == name;
+            let set_each_method = set_each_method;
+            eprintln!("\nset_each_method of {:?} \n {:#?}", name, &set_each_method);
+            if conflict {
+                return set_each_method.unwrap();
+            } else {
+                return quote! {
+                    #set_method
+                    #set_each_method
+                };
+            }
         }
-
     });
 
     let build_fields = fields.iter().map(|f| {
@@ -127,7 +139,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let build_empty = fields.iter().map(|f| {
         let name = &f.ident;
-        if get_each_arg(f).is_some() && inner_type("Vec", &f.ty).is_some() {
+        let (each_arg, _) = get_each_arg(f);
+        if each_arg.is_some() && inner_type("Vec", &f.ty).is_some() {
             quote! { 
                 #name: Some(Vec::new()),
             }
