@@ -30,7 +30,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
     });
 
 
-    let get_each_arg = |f: &syn::Field| -> (Option<syn::Ident>, Option<proc_macro2::TokenStream>) {
+    let get_each_arg = |f: &syn::Field| -> (std::option::Option<syn::Ident>, std::option::Option<proc_macro2::TokenStream>) {
         for attr in &f.attrs {
             if let syn::Meta::List( ref metalist ) = attr.meta {
                 if metalist.path.segments.len() == 1 && metalist.path.segments[0].ident == "builder" {
@@ -40,7 +40,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
                         TokenTree::Ident(ref i) => {
                             if i != "each" {
                                 let err = syn::Error::new_spanned(metalist, r#"expected `builder(each = "...")`"#).to_compile_error();
-                                return (None, Some(err));
+                                return (std::option::Option::None, std::option::Option::Some(err));
                             }
                         },
                         unknown_token => panic!("expected each, found {}", unknown_token),
@@ -63,7 +63,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
                             let vec_inner_type = inner_type("Vec", &f.ty).unwrap();
                             let set_each_method = quote! { 
                                 pub fn #each_arg(&mut self, #each_arg: #vec_inner_type) -> &mut Self {
-                                    if let Some(ref mut values) = self.#arg {
+                                    if let std::option::Option::Some(ref mut values) = self.#arg {
                                         values.push(#each_arg);
                                     } else {
                                         self.#arg = Some(vec![#each_arg]);
@@ -78,7 +78,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        (None, None)
+        (std::option::Option::None, std::option::Option::None)
+               
     };
 
     let methods = fields.iter().map(|f| {
@@ -103,15 +104,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
         let (each_arg, set_each_method) = get_each_arg(f);
 
-        if each_arg.is_none() && set_each_method.is_some() {
-            return set_each_method.unwrap();
-            //return set_method;
-        } else if each_arg.is_none() {
+        if each_arg.is_none() && set_each_method.is_none() { // no attributes provided
             return set_method;
+        } else if each_arg.is_none() && set_each_method.is_some() { // attributes have token error 
+            return set_each_method.unwrap();
         } else {
             let conflict = &each_arg == name;
             let set_each_method = set_each_method;
-            eprintln!("\nset_each_method of {:?} \n {:#?}", name, &set_each_method);
             if conflict {
                 return set_each_method.unwrap();
             } else {
@@ -146,7 +145,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
             }
         } else {
             quote! { 
-                #name: None,
+                #name: std::option::Option::None,
             }
         }
     });
@@ -159,7 +158,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         impl #builder_ident {
             #(#methods)*
 
-            pub fn build(&mut self) -> Result<#struct_name, Box<dyn std::error::Error>> {
+            pub fn build(&mut self) -> std::result::Result<#struct_name, std::boxed::Box<dyn std::error::Error>> {
                 Ok(#struct_name {
                     #(#build_fields)*
                 })
@@ -178,22 +177,22 @@ pub fn derive(input: TokenStream) -> TokenStream {
     expanded.into()
 }
 
-fn inner_type<'a>(wrapper_ty: &str, ty: &'a syn::Type) -> Option<&'a syn::Type> {
+fn inner_type<'a>(wrapper_ty: &str, ty: &'a syn::Type) -> std::option::Option<&'a syn::Type> {
     if let syn::Type::Path(ref p) = ty {
        if p.path.segments.len() != 1 || p.path.segments[0].ident != wrapper_ty {
-           return None;
+           return std::option::Option::None;
        }
 
        if let syn::PathArguments::AngleBracketed(ref inner_ty_args) = p.path.segments[0].arguments {
            if inner_ty_args.args.len() != 1 {
-               return None;
+               return std::option::Option::None;
            } 
 
            let arg = inner_ty_args.args.first().unwrap();
            if let syn::GenericArgument::Type(ref inner_ty) = arg {
-               return Some(inner_ty);
+               return std::option::Option::Some(inner_ty);
            }
        }
     }
-    None
+    std::option::Option::None
 }
